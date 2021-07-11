@@ -154,7 +154,7 @@ impl Pat {
     }
 
     pub fn wildcard() -> Self {
-        Pattern::Var("_".into()).into()
+        Pattern::wildcard().into()
     }
 }
 
@@ -175,6 +175,10 @@ impl From<Pattern> for Pat {
 }
 
 impl Pattern {
+    pub fn wildcard() -> Self {
+        Pattern::Var("_".into())
+    }
+
     pub fn vars(&self) -> Vec<&str> {
         match self {
             Pattern::Var(v) => vec![v],
