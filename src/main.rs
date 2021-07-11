@@ -1,11 +1,11 @@
-mod cgen;
+mod st;
 mod syntax;
 
 fn main() {}
 
 #[cfg(test)]
 mod test {
-    use super::cgen::*;
+    use super::st::*;
     use super::syntax::*;
 
     #[test]
