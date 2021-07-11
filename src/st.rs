@@ -264,11 +264,17 @@ impl Sol {
                     let t = sol_alpha.intersect(&sol_beta);
 
                     if t.is_none() {
-                        eprintln!("... solved as {} ⊆ {}, yields intersection {} bottom", sol_alpha, sol_beta, t);
+                        eprintln!(
+                            "... solved as {} ⊆ {}, yields intersection {} bottom",
+                            sol_alpha, sol_beta, t
+                        );
                         *self = Sol::Bottom;
                     } else {
                         match t_alpha {
-                            Type::Var(v) => self.extend(*v, t),
+                            Type::Var(v) => {
+                                eprintln!("... set {} to {}", t_alpha, t);
+                                self.extend(*v, t)
+                            }
                             _ => panic!("... got {}, unsure how to update solution", t),
                         }
                     }
