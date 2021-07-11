@@ -93,8 +93,8 @@ mod test {
         let mut cgen = ConstraintGenerator::new();
         let (t, cs) = cgen.cgen(&Ctx::new(), &and_e);
 
-        eprintln!("t = {:?}", t);
-        eprintln!("cs = {:?}", cs);
+        eprintln!("t = {}", t); 
+        eprintln!("cs = {}", Constraint::And(cs.clone()));
 
         let mut sol = Sol::new();
         sol.solve_conj(&cs);
@@ -102,6 +102,6 @@ mod test {
         eprintln!("sol = {:?}", sol);
 
         let t_sol = sol.sol(&t);
-        eprintln!("t_sol = {:?}", t_sol);
+        eprintln!("t_sol = {}", t_sol);
     }
 }

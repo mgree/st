@@ -403,3 +403,90 @@ pub enum Constant {
     Float(f64),
     Atom(String),
 }
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Type::None => write!(f, "none"),
+            Type::Any => write!(f, "any"),
+            Type::Var(v) => write!(f, "t{}", v),
+            Type::Ctor(c, args) => {
+                write!(f, "{}(", c)?;
+                fmt_slice(f, args, &", ")?;
+                write!(f, ")")
+            }
+            Type::Fun(args, ret) => {
+                write!(f, "((")?;
+                fmt_slice(f, args, &", ")?;
+                write!(f, ") -> {})", ret)
+            }
+            Type::Union(t1, t2) => write!(f, "{} ∪ {}", t1, t2),
+            Type::When(t, cs) => {
+                write!(f, "({} when ", t)?;
+
+                fmt_slice(f, cs, &", ")?;
+                write!(f, ")")
+            }
+            Type::Pred(p) => write!(f, "{}()", p),
+        }
+    }
+}
+
+impl std::fmt::Display for Constraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Constraint::Sub(t1, t2) => write!(f, "{} ⊆ {}", t1, t2),
+            Constraint::And(cs) => fmt_slice(f, cs, &" ∧ "),
+            Constraint::Or(cs) => fmt_slice(f, cs, &" ∨ "),
+        }
+    }
+}
+
+impl std::fmt::Display for Pred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Pred::Constant(c) => write!(f, "{}", c),
+            Pred::Ground(g) => write!(f, "is_{}", g),
+        }
+    }
+}
+
+impl std::fmt::Display for Constant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Constant::Atom(s) => write!(f, "{}", s),
+            Constant::Integer(n) => write!(f, "{}", n),
+            Constant::Float(n) => write!(f, "{}", n),
+        }
+    }
+}
+
+impl std::fmt::Display for Ground {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Ground::Atom => write!(f, "atom"),
+            Ground::Float => write!(f, "float"),
+            Ground::Fun => write!(f, "fun"),
+            Ground::Integer => write!(f, "int"),
+        }
+    }
+}
+
+fn fmt_slice<'a, T, S>(
+    f: &mut std::fmt::Formatter<'a>,
+    vs: &[T],
+    sep: &S,
+) -> Result<(), std::fmt::Error>
+where
+    T: std::fmt::Display,
+    S: std::fmt::Display,
+{
+    if vs.is_empty() {
+        return Ok(());
+    }
+
+    for v in &vs[0..vs.len() - 1] {
+        write!(f, "{}{}", v, sep)?;
+    }
+    write!(f, "{})", vs[vs.len() - 1])
+}

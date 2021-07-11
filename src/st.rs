@@ -256,6 +256,7 @@ impl Sol {
 
         match c {
             Constraint::Sub(t_alpha, t_beta) => {
+                eprintln!("solving {}", c);
                 let sol_alpha = self.sol(&t_alpha);
                 let sol_beta = self.sol(&t_beta);
 
@@ -263,19 +264,16 @@ impl Sol {
                     let t = sol_alpha.intersect(&sol_beta);
 
                     if t.is_none() {
-                        eprintln!("{:?} <= {:?} as {:?} <= {:?} yields intersection {:?} bottom", t_alpha, t_beta, sol_alpha, sol_beta, t);
+                        eprintln!("... solved as {} ⊆ {}, yields intersection {} bottom", sol_alpha, sol_beta, t);
                         *self = Sol::Bottom;
                     } else {
                         match t_alpha {
                             Type::Var(v) => self.extend(*v, t),
-                            _ => panic!(
-                                "resolved {:?} <= {:?} as {:?}, unsure how to update solution",
-                                t_alpha, t_beta, t
-                            ),
+                            _ => panic!("... got {}, unsure how to update solution", t),
                         }
                     }
                 } else {
-                    eprintln!("resolved {:?} <= {:?} trivially, as {:?} <= {:?}", t_alpha, t_beta, sol_alpha, sol_beta);
+                    eprintln!("... trivial, as {} <= {}", sol_alpha, sol_beta);
                 }
             }
             Constraint::And(cs) => {
