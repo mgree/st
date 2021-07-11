@@ -1,0 +1,26 @@
+name: Build and test
+
+on:
+  - pull_request
+  - push
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Build st and run unit tests
+        run: |
+          cargo build --verbose --all
+          cargo test -- --nocapture
+              
