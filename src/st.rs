@@ -199,3 +199,141 @@ impl ConstraintGenerator {
         }
     }
 }
+
+impl Sol {
+    pub fn sol(&self, t: &Type) -> Type {
+        match (self, t) {
+            (Sol::Bottom, _) => panic!("applied empty solution"),
+            (_, Type::Any) | (_, Type::None) | (_, Type::Pred(_)) => t.clone(),
+            (Sol::Mapping(sol), Type::Var(v)) => match sol.get(v) {
+                Some(t) => t.clone(),
+                None => Type::Any,
+            },
+            (Sol::Mapping(_), Type::Ctor(c, args)) => {
+                Type::Ctor(c.clone(), args.iter().map(|t| self.sol(t)).collect())
+            }
+            (Sol::Mapping(_), Type::Fun(args, ret)) => Type::Fun(
+                args.iter().map(|t| self.sol(t)).collect(),
+                Box::new(self.sol(ret)),
+            ),
+            (Sol::Mapping(_), Type::Union(t1, t2)) => {
+                Type::Union(Box::new(self.sol(t1)), Box::new(self.sol(t2)))
+            }
+            (Sol::Mapping(_), Type::When(t, _c)) => {
+                self.sol(t) // should we ensure that we've satisfied c?
+            }
+        }
+    }
+
+    pub fn solves_conj<'a, I>(&'a self, cs: I) -> bool
+    where
+        I: IntoIterator<Item = &'a Constraint>,
+    {
+        cs.into_iter().all(|c| self.solves1(&c))
+    }
+
+    pub fn solves1(&self, c: &Constraint) -> bool {
+        if let Sol::Bottom = self {
+            return false;
+        }
+
+        match c {
+            Constraint::Sub(t1, t2) => {
+                let t1 = self.sol(t1);
+                let t2 = self.sol(t2);
+
+                !t1.is_none() && t1.sub(&t2)
+            }
+            Constraint::And(cs) => self.solves_conj(cs),
+            Constraint::Or(cs) => cs.iter().any(|c| self.solves1(c)),
+        }
+    }
+
+    pub fn solve(&mut self, c: &Constraint) {
+        if let Sol::Bottom = self {
+            return;
+        }
+
+        match c {
+            Constraint::Sub(t_alpha, t_beta) => {
+                let sol_alpha = self.sol(&t_alpha);
+                let sol_beta = self.sol(&t_beta);
+
+                if !sol_alpha.sub(&sol_beta) {
+                    let t = sol_alpha.intersect(&sol_beta);
+
+                    if t.is_none() {
+                        eprintln!("{:?} <= {:?} as {:?} <= {:?} yields intersection {:?} bottom", t_alpha, t_beta, sol_alpha, sol_beta, t);
+                        *self = Sol::Bottom;
+                    } else {
+                        match t_alpha {
+                            Type::Var(v) => self.extend(*v, t),
+                            _ => panic!(
+                                "resolved {:?} <= {:?} as {:?}, unsure how to update solution",
+                                t_alpha, t_beta, t
+                            ),
+                        }
+                    }
+                } else {
+                    eprintln!("resolved {:?} <= {:?} trivially, as {:?} <= {:?}", t_alpha, t_beta, sol_alpha, sol_beta);
+                }
+            }
+            Constraint::And(cs) => {
+                // solve(Sol, Conj) =
+                //  / Sol                 when        solve_conj(solve(Sol, Conj)) = Sol
+                //  \ solve(Sol', Conj)   when Sol' = solve_conj(solve(Sol, Conj)) = Sol
+
+                // this, of course, makes no sense. but i guess they're saying
+                // solve and _resolve_ until fixpoint?
+                let mut orig = self.clone();
+
+                loop {
+                    self.solve_conj(cs);
+
+                    if self == &orig {
+                        return;
+                    } else {
+                        orig = self.clone();
+                    }
+                }
+            }
+            Constraint::Or(cs) => {
+                let sols: Vec<Sol> = cs
+                    .iter()
+                    .map(|c| {
+                        let mut sol = self.clone();
+                        sol.solve(c);
+                        sol
+                    })
+                    .filter(|sol| sol.is_mapping())
+                    .collect();
+
+                if sols.is_empty() {
+                    *self = Sol::Bottom;
+                } else {
+                    *self = sols
+                        .into_iter()
+                        .reduce(|sol1, sol2| sol1.union(sol2))
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    pub fn solve_conj<'a, I>(&'a mut self, cs: I)
+    where
+        I: IntoIterator<Item = &'a Constraint>,
+    {
+        if let Sol::Bottom = self {
+            return;
+        }
+
+        for c in cs.into_iter() {
+            self.solve(c);
+
+            if let Sol::Bottom = self {
+                return;
+            }
+        }
+    }
+}
