@@ -26,26 +26,20 @@ mod test {
                         true_pat.clone(),
                         Expr::Case(
                             Box::new(Expr::Var(y.clone())),
-                            vec![
-                                (true_pat, true_e),
-                                (Pat::wildcard(), false_e.clone()),
-                            ],
+                            vec![(true_pat, true_e), (Pat::wildcard(), false_e.clone())],
                         ),
                     ),
                     (false_pat.clone(), false_e.clone()),
                     (
                         Pat::wildcard(),
-                        Expr::Case(
-                            Box::new(Expr::Var(y)),
-                            vec![(false_pat, false_e)],
-                        ),
+                        Expr::Case(Box::new(Expr::Var(y)), vec![(false_pat, false_e)]),
                     ),
                 ],
             ),
         }));
 
-        let mut cgen = ConstraintGenerator::new();
-        let (_t, _cs) = cgen.cgen(&Ctx::new(), &and_e);
+        let t_sol = infer(&and_e);
+        eprintln!("inferred type {}", t_sol);
     }
 
     #[test]
@@ -66,8 +60,7 @@ mod test {
                 )),
                 vec![
                     (
-                        Pattern::Ctor("product".into(), vec![true_pat.clone(), true_pat])
-                            .into(),
+                        Pattern::Ctor("product".into(), vec![true_pat.clone(), true_pat]).into(),
                         true_e,
                     ),
                     (
@@ -79,29 +72,15 @@ mod test {
                         false_e.clone(),
                     ),
                     (
-                        Pattern::Ctor(
-                            "product".into(),
-                            vec![Pattern::wildcard(), false_pat],
-                        )
-                        .into(),
+                        Pattern::Ctor("product".into(), vec![Pattern::wildcard(), false_pat])
+                            .into(),
                         false_e,
                     ),
                 ],
             ),
         }));
 
-        let mut cgen = ConstraintGenerator::new();
-        let (t, cs) = cgen.cgen(&Ctx::new(), &and_e);
-
-        eprintln!("t = {}", t); 
-        eprintln!("cs = {}", Constraint::And(cs.clone()));
-
-        let mut sol = Sol::new();
-        sol.solve_conj(&cs);
-
-        eprintln!("sol = {:?}", sol);
-
-        let t_sol = sol.sol(&t);
-        eprintln!("t_sol = {}", t_sol);
+        let t_sol = infer(&and_e);
+        eprintln!("inferred type {}", t_sol);
     }
 }

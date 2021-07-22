@@ -2,6 +2,26 @@
 
 use super::syntax::*;
 
+pub fn infer(e: &Expr) -> Type {
+    let mut cgen = ConstraintGenerator::new();
+    let (t, cs) = cgen.cgen(&Ctx::new(), &e);
+
+    eprintln!("t = {}", t);
+    eprintln!("cs = {}", Constraint::And(cs.clone()));
+
+    let mut sol = Sol::new();
+    sol.solve_conj(&mut cgen, &cs);
+
+    eprintln!("sol = {:?}", sol);
+
+    let mut t_sol = sol.sol(&t);
+    eprintln!("t_sol = {}", t_sol);
+
+    t_sol.default_to_any();
+
+    t_sol
+}
+
 pub struct ConstraintGenerator {
     next_tvar: TVar,
 }
@@ -11,6 +31,8 @@ impl Default for ConstraintGenerator {
         ConstraintGenerator { next_tvar: 0 }
     }
 }
+
+const OUTER_WHEN: bool = false;
 
 impl ConstraintGenerator {
     pub fn new() -> Self {
@@ -153,16 +175,23 @@ impl ConstraintGenerator {
 
         let t = self.fresh_tvar();
 
-        (
-            t.clone(),
-            vec![Constraint::eq(
-                t.clone(),
-                Type::Fun(
+        // ??? which should it be
+        let t_fun = if OUTER_WHEN {
+            Type::When(
+                Box::new(Type::Fun(
                     bindings.into_iter().map(|(_, t)| t).collect(),
-                    Box::new(Type::When(Box::new(t_body), cs)), // or is the when scoped on the whole thing?!
-                ),
-            )],
-        )
+                    Box::new(t_body),
+                )),
+                cs,
+            )
+        } else {
+            Type::Fun(
+                bindings.into_iter().map(|(_, t)| t).collect(),
+                Box::new(Type::When(Box::new(t_body), cs)),
+            )
+        };
+
+        (t.clone(), vec![Constraint::eq(t.clone(), t_fun)])
     }
 
     fn cgen_pat(&mut self, ctx: &Ctx, p: &Pat) -> Vec<Constraint> {
@@ -206,8 +235,8 @@ impl Sol {
             (Sol::Bottom, _) => panic!("applied empty solution"),
             (_, Type::Any) | (_, Type::None) | (_, Type::Pred(_)) => t.clone(),
             (Sol::Mapping(sol), Type::Var(v)) => match sol.get(v) {
-                Some(t) => t.clone(),
-                None => Type::Any,
+                Some(t) => self.sol(t),
+                None => Type::Var(*v),
             },
             (Sol::Mapping(_), Type::Ctor(c, args)) => {
                 Type::Ctor(c.clone(), args.iter().map(|t| self.sol(t)).collect())
@@ -219,8 +248,8 @@ impl Sol {
             (Sol::Mapping(_), Type::Union(t1, t2)) => {
                 Type::Union(Box::new(self.sol(t1)), Box::new(self.sol(t2)))
             }
-            (Sol::Mapping(_), Type::When(t, _c)) => {
-                self.sol(t) // should we ensure that we've satisfied c?
+            (Sol::Mapping(_), Type::When(t, c)) => {
+                Type::When(Box::new(self.sol(t)), c.clone()) // should we ensure that we've satisfied c?
             }
         }
     }
@@ -249,37 +278,165 @@ impl Sol {
         }
     }
 
-    pub fn solve(&mut self, c: &Constraint) {
+    pub fn solve(&mut self, cgen: &mut ConstraintGenerator, c: &Constraint) {
         if let Sol::Bottom = self {
             return;
         }
+        eprintln!("solving {}", c);
 
         match c {
-            Constraint::Sub(t_alpha, t_beta) => {
-                eprintln!("solving {}", c);
-                let sol_alpha = self.sol(&t_alpha);
-                let sol_beta = self.sol(&t_beta);
+            Constraint::Sub(tl, tr) => {
+                use Type::*;
+                let tl = self.sol(tl);
+                let tr = self.sol(tr);
 
-                if !sol_alpha.sub(&sol_beta) {
-                    let t = sol_alpha.intersect(&sol_beta);
+                eprintln!("resolved {} ⊆ {}", tl, tr);
+                if tl.sub(&tr) {
+                    eprintln!("fast path");
+                    return;
+                }
 
-                    if t.is_none() {
-                        eprintln!(
-                            "... solved as {} ⊆ {}, yields intersection {} bottom",
-                            sol_alpha, sol_beta, t
-                        );
-                        *self = Sol::Bottom;
-                    } else {
-                        match t_alpha {
-                            Type::Var(v) => {
-                                eprintln!("... set {} to {}", t_alpha, t);
-                                self.extend(*v, t)
+                match (tl, tr) {
+                    (None, _) | (_, Any) => (),
+                    (_, None) | (Any, _) => *self = Sol::Bottom,
+                    (t_alpha @ Var(_), t_beta) | (t_alpha @ Pred(_), t_beta @ Var(_)) => {
+                        eprintln!("var case");
+                        if !t_alpha.sub(&t_beta) {
+                            let t = t_alpha.intersect(&t_beta);
+                            if t.is_none() {
+                                eprintln!(
+                                    "... solved as {} ⊆ {}, yields intersection {} bottom",
+                                    t_alpha, t_beta, t
+                                );
+                                *self = Sol::Bottom;
+                            } else {
+                                match t_alpha {
+                                    Type::Var(v) => {
+                                        eprintln!("... set {} to {}", t_alpha, t);
+                                        self.extend(v, t)
+                                    }
+                                    _ => panic!("... got {}, unsure how to update solution", t),
+                                }
                             }
-                            _ => panic!("... got {}, unsure how to update solution", t),
+                        } else {
+                            eprintln!("... trivial, as {} <= {}", t_alpha, t_beta);
                         }
                     }
-                } else {
-                    eprintln!("... trivial, as {} <= {}", sol_alpha, sol_beta);
+                    (Ctor(c, args), t_beta @ Var(_)) => {
+                        eprintln!("ctor case");
+                        // fresh type variables for each part
+                        let vars = args.iter().map(|_t| cgen.fresh_tvar()).collect::<Vec<_>>();
+
+                        // force each t_var to unify with each part
+                        let cs = vars
+                            .iter()
+                            .zip(args)
+                            .map(|(tvar, targ)| Constraint::Sub(tvar.clone(), targ.clone()))
+                            .collect::<Vec<_>>();
+                        self.solve_conj(cgen, &cs);
+
+                        // force t_beta to unify with the constructor applied to tvars
+                        self.solve(
+                            cgen,
+                            &Constraint::Sub(t_beta.clone(), Type::Ctor(c.clone(), vars)),
+                        );
+                    }
+                    (Fun(args, ret), t_beta @ Var(_)) => {
+                        eprintln!("fun case");
+
+                        // fresh type variables for each part
+                        let vars = args.iter().map(|_t| cgen.fresh_tvar()).collect::<Vec<_>>();
+                        let ret_var = cgen.fresh_tvar();
+
+                        // force each t_var to unify with each part --- contravariant
+                        let mut cs = vars
+                            .iter()
+                            .zip(args)
+                            .map(|(tvar, targ)| Constraint::Sub(targ.clone(), tvar.clone()))
+                            .collect::<Vec<_>>();
+                        // return types --- covariant
+                        let ret_c = Constraint::Sub(ret_var.clone(), *ret.clone());
+                        eprintln!("ret c = {}", ret_c);
+                        cs.push(ret_c);
+
+                        self.solve_conj(cgen, &cs);
+
+                        // force t_beta to unify with the constructor applied to tvars
+                        self.solve(
+                            cgen,
+                            &Constraint::Sub(t_beta.clone(), Type::Fun(vars, Box::new(ret_var))),
+                        );
+                    }
+                    (Ctor(c1, args1), Ctor(c2, args2)) => {
+                        eprintln!("ctor/ctor case");
+                        if c1 == c2 && args1.len() == args2.len() {
+                            let cs = args1
+                                .iter()
+                                .zip(args2)
+                                .map(|(t1, t2)| Constraint::Sub(t1.clone(), t2.clone()))
+                                .collect::<Vec<_>>();
+                            self.solve_conj(cgen, &cs);
+                        } else {
+                            *self = Sol::Bottom;
+                        }
+                    }
+                    (Fun(args1, ret1), Fun(args2, ret2)) => {
+                        eprintln!("fun/fun case");
+                        if args1.len() == args2.len() {
+                            // contravariant
+                            let cs = args1
+                                .iter()
+                                .zip(args2)
+                                .map(|(t1, t2)| Constraint::Sub(t2.clone(), t1.clone()))
+                                .collect::<Vec<_>>();
+                            self.solve_conj(cgen, &cs);
+                            self.solve(cgen, &Constraint::Sub(*ret1.clone(), *ret2.clone()));
+                        } else {
+                            *self = Sol::Bottom;
+                        }
+                    }
+                    (When(t1, cs), t2) => {
+                        eprintln!("whenl case");
+                        self.solve_conj(cgen, &cs);
+                        self.solve(cgen, &Constraint::Sub(*t1.clone(), t2.clone()));
+                    }
+                    (t1, When(t2, _cs)) => {
+                        eprintln!("whenr case");
+                        self.solve(cgen, &Constraint::Sub(t1.clone(), *t2.clone()));
+                    }
+                    (t1, Union(t21, t22)) => {
+                        eprintln!("unionr case");
+                        self.solve_conj(
+                            cgen,
+                            vec![
+                                &Constraint::Sub(t1.clone(), *t21.clone()),
+                                &Constraint::Sub(t1.clone(), *t22.clone()),
+                            ],
+                        );
+                    }
+                    (Union(t11, t12), t2) => {
+                        eprintln!("unionl case");
+                        self.solve_conj(
+                            cgen,
+                            vec![
+                                &Constraint::Sub(*t11.clone(), t2.clone()),
+                                &Constraint::Sub(*t12.clone(), t2.clone()),
+                            ],
+                        );
+                    }
+
+                    (Fun(..), Type::Pred(super::syntax::Pred::Ground(Ground::Fun))) => (),
+                    (Pred(p1), Pred(p2)) => {
+                        if p1 != p2 {
+                            *self = Sol::Bottom
+                        }
+                    }
+                    (Pred(..), Ctor(..))
+                    | (Ctor(..), Pred(..))
+                    | (Pred(..), Fun(..))
+                    | (Fun(..), Pred(..))
+                    | (Ctor(..), Fun(..))
+                    | (Fun(..), Ctor(..)) => *self = Sol::Bottom,
                 }
             }
             Constraint::And(cs) => {
@@ -292,7 +449,7 @@ impl Sol {
                 let mut orig = self.clone();
 
                 loop {
-                    self.solve_conj(cs);
+                    self.solve_conj(cgen, cs);
 
                     if self == &orig {
                         return;
@@ -306,7 +463,7 @@ impl Sol {
                     .iter()
                     .map(|c| {
                         let mut sol = self.clone();
-                        sol.solve(c);
+                        sol.solve(cgen, c);
                         sol
                     })
                     .filter(|sol| sol.is_mapping())
@@ -324,7 +481,7 @@ impl Sol {
         }
     }
 
-    pub fn solve_conj<'a, I>(&'a mut self, cs: I)
+    pub fn solve_conj<'a, I>(&'a mut self, cgen: &mut ConstraintGenerator, cs: I)
     where
         I: IntoIterator<Item = &'a Constraint>,
     {
@@ -333,7 +490,7 @@ impl Sol {
         }
 
         for c in cs.into_iter() {
-            self.solve(c);
+            self.solve(cgen, c);
 
             if let Sol::Bottom = self {
                 return;

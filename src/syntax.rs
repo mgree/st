@@ -80,6 +80,33 @@ pub enum Type {
 }
 
 impl Type {
+    /// Converst any remaining type variables to `any`
+    pub fn default_to_any(&mut self) {
+        match self {
+            Type::None | Type::Pred(_) | Type::Any => (),
+            Type::Var(_) => *self = Type::Any,
+            Type::Ctor(_, args) => {
+                for t in args {
+                    t.default_to_any()
+                }
+            }
+            Type::Fun(args, ret) => {
+                for t in args {
+                    t.default_to_any()
+                }
+                ret.default_to_any();
+            }
+            Type::Union(t1, t2) => {
+                t1.default_to_any();
+                t2.default_to_any();
+            }
+            Type::When(t, _) => {
+                t.default_to_any();
+                *self = *t.clone();
+            }
+        }
+    }
+
     pub fn is_none(&self) -> bool {
         match self {
             Type::None => true,
@@ -88,7 +115,7 @@ impl Type {
             Type::Union(t1, t2) => t1.is_none() && t2.is_none(),
             Type::When(t, _cs) => t.is_none(), // look at cs?
             Type::Pred(_) | Type::Any => false,
-            Type::Var(_) => panic!("asked is_none on {:?}, with type variables", self),
+            Type::Var(_) => false,
         }
     }
 
@@ -99,9 +126,8 @@ impl Type {
             (_, None) => false,
             (_, Any) => true,
             (Any, _) => false,
-            (Var(_), _) | (_, Var(_)) => {
-                panic!("asked sub {:?} <: {:?}, with type variables", self, other)
-            }
+            (Var(v1), Var(v2)) => v1 == v2,
+            (Var(_), _) | (_, Var(_)) => false,
             (Ctor(c1, args1), Ctor(c2, args2)) => {
                 c1 == c2
                     && args1.len() == args2.len()
@@ -146,9 +172,7 @@ impl Type {
             (None, _) | (_, None) => Type::None,
             (t, Any) | (Any, t) => t.clone(),
             (Var(v1), Var(v2)) if v1 == v2 => self.clone(),
-            (Var(_), _) | (_, Var(_)) => {
-                panic!("asked sub {:?} <: {:?}, with type variables", self, other)
-            }
+            (Var(_), t) | (t, Var(_)) => t.clone(),
             (Ctor(c1, args1), Ctor(c2, args2)) => {
                 if c1 == c2 && args1.len() == args2.len() {
                     Type::Ctor(
